@@ -1,0 +1,75 @@
+name: Auto-Build Last Stable Version of Squid
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronized]
+  workflow_dispatch:
+    inputs:
+      branch_or_tag:
+        description: 'Specify a specific branch or tag (optional)'
+        required: false
+        default: 'main'
+
+jobs:
+  auto_build_latest_stable_version:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Your Forked Repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0 # Required for proper handling of tags and branches
+
+    - name: Fetch Tags
+      run: git fetch --tags
+
+    - name: Determine Latest Stable Release
+      id: determine_release
+      run: |
+        LATEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
+        echo "::set-output name=latest_tag::$LATEST_TAG"
+
+    - name: Checkout Specific Branch/Tag (Optional)
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.branch_or_tag != ''
+      run: |
+        git checkout ${{ github.event.inputs.branch_or_tag }}
+
+    - name: Checkout Latest Stable Release
+      if: github.event_name != 'workflow_dispatch' || github.event.inputs.branch_or_tag == ''
+      run: |
+        git checkout ${{ steps.determine_release.outputs.latest_tag }}
+
+    - name: Setup Environment
+      run: |
+        sudo apt-get update && sudo apt-get install -y mingw-w64 gcc-multilib make tar unzip wget git
+
+    - name: Configure Project
+      run: |
+        export CC=x86_64-w64-mingw32-gcc
+        export CXX=x86_64-w64-mingw32-g++
+        ./configure --host=x86_64-w64-mingw32 \
+                    --prefix=/usr/local/squid \
+                    --enable-debug=no \
+                    --disable-dependency-tracking \
+                    --with-openssl
+
+    - name: Compile Project
+      run: |
+        make clean
+        make
+
+    - name: Archive Binaries
+      if: always()
+      run: |
+        mkdir -p artifacts
+        cp -R . artifacts/
+        zip -r squid-binaries-${{ steps.determine_release.outputs.latest_tag }}.zip artifacts/*
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: squid-bins-${{ steps.determine_release.outputs.latest_tag }}
+        path: squid-binaries-${{ steps.determine_release.outputs.latest_tag }}.zip
